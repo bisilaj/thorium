@@ -17,6 +17,7 @@ mod files;
 mod groups;
 mod images;
 mod pipelines;
+mod reactions;
 mod search;
 mod trees;
 
@@ -134,7 +135,8 @@ impl ThoriumMCP {
                 + Self::tree_router()
                 + Self::docs_router()
                 + Self::groups_router()
-                + Self::search_router(),
+                + Self::search_router()
+                + Self::reactions_router(),
         }
     }
 }

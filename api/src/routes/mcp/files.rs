@@ -26,7 +26,7 @@ use crate::models::ResultGetParams;
 use super::ThoriumMCP;
 
 /// Validate that a string looks like a SHA256 hash (64 hex characters).
-fn validate_sha256(sha256: &str) -> Result<(), ErrorData> {
+pub(super) fn validate_sha256(sha256: &str) -> Result<(), ErrorData> {
     if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(ErrorData {
             code: rmcp::model::ErrorCode::INVALID_PARAMS,
