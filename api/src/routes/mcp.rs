@@ -14,8 +14,10 @@ use std::str::FromStr;
 
 mod docs;
 mod files;
+mod groups;
 mod images;
 mod pipelines;
+mod search;
 mod trees;
 
 use crate::Conf;
@@ -50,7 +52,11 @@ impl McpConfig {
         match parts.headers.get("Authorization") {
             Some(value) => {
                 // get our value as a str
-                let value_str = value.to_str().unwrap();
+                let value_str = value.to_str().map_err(|_| ErrorData {
+                    code: rmcp::model::ErrorCode::INVALID_PARAMS,
+                    message: "Invalid authorization header encoding".into(),
+                    data: None,
+                })?;
                 // split this on spaces and get our token
                 // if there isn't a space then assume they passed just a token
                 match value_str.split_once(' ') {
@@ -126,7 +132,9 @@ impl ThoriumMCP {
                 + Self::images_router()
                 + Self::pipelines_router()
                 + Self::tree_router()
-                + Self::docs_router(),
+                + Self::docs_router()
+                + Self::groups_router()
+                + Self::search_router(),
         }
     }
 }
