@@ -39,7 +39,7 @@ impl ThoriumMCP {
     /// or the Thorium API is unreachable.
     #[tool(
         name = "list_groups",
-        description = "List the groups accessible to the current user. Groups are the multi-tenancy boundary in Thorium - nearly every operation requires a group name. Call this first to discover which groups are available."
+        description = "List the groups accessible to the current user. Groups are the multi-tenancy boundary in Thorium - nearly every operation requires a group name. Call this first, then use list_pipelines or list_images with a group name to explore available analysis capabilities."
     )]
     #[instrument(name = "ThoriumMCP::list_groups", skip(self, parts), err(Debug))]
     pub async fn list_groups(

@@ -20,6 +20,9 @@ use super::ThoriumMCP;
 /// Default maximum number of images to return from a list operation.
 const DEFAULT_LIST_LIMIT: u64 = 100;
 
+/// Hard ceiling on images to prevent excessive responses.
+const MAX_LIST_LIMIT: u64 = 500;
+
 /// The params needed to list images in a group.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ListImages {
@@ -115,8 +118,8 @@ impl ThoriumMCP {
     ) -> Result<CallToolResult, ErrorData> {
         // get a thorium client
         let thorium = self.conf.client(&parts).await?;
-        // determine the limit
-        let limit = params.limit.unwrap_or(DEFAULT_LIST_LIMIT);
+        // determine the limit, capped at the hard ceiling and at least 1
+        let limit = params.limit.unwrap_or(DEFAULT_LIST_LIMIT).min(MAX_LIST_LIMIT).max(1);
         // list images in this group with full details
         let mut cursor = thorium.images.list(&params.group).details().limit(limit);
         // fetch the data

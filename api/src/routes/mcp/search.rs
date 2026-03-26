@@ -162,10 +162,11 @@ impl ThoriumMCP {
         }
         // get a thorium client
         let thorium = self.conf.client(&parts).await?;
-        // determine the max results, capped at the hard ceiling
+        // determine the max results, capped at the hard ceiling and at least 1
         let limit = max_results
             .unwrap_or(DEFAULT_MAX_RESULTS)
-            .min(MAX_SEARCH_RESULTS);
+            .min(MAX_SEARCH_RESULTS)
+            .max(1);
         // build the search options
         let mut opts = ElasticSearchOpts::new(&query);
         opts.groups = groups;

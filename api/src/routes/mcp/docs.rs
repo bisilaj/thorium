@@ -292,7 +292,7 @@ impl ThoriumMCP {
     /// if the MCP session token is invalid.
     #[tool(
         name = "get_docs_toc",
-        description = "Get the table of contents for the Thorium documentation. Returns a structured list of all documentation pages with their titles, paths, and nesting depth. Call this first to understand what documentation is available."
+        description = "Get the table of contents for the Thorium documentation. Returns a structured list of all documentation pages with their titles, paths, and nesting depth. Use this to understand what documentation is available before calling get_doc_page."
     )]
     #[instrument(name = "ThoriumMCP::get_docs_toc", skip(self, parts), err(Debug))]
     pub async fn get_docs_toc(
