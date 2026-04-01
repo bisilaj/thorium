@@ -206,8 +206,9 @@ impl ThoriumMCP {
         // execute the search
         let cursor = thorium.search.search(&opts).await?;
         // project each hit, extracting identifying fields from the ES document.
-        // fields are checked in the _source first, then the highlight field
-        // as a fallback (with Kibana tags stripped).
+        // fields are checked in _source first, then highlight, then _id as
+        // a last resort. The _id for tag/result docs is "{sha256}-{group}"
+        // or "{url}-{group}".
         let hits: Vec<SearchHit> = cursor
             .data
             .iter()
@@ -215,9 +216,29 @@ impl ThoriumMCP {
                 let source = doc.source.as_ref();
                 let highlight = doc.highlight.as_ref();
                 // extract sha256 (sample results/tags) or url (repo results/tags)
-                let sha256 = extract_field(source, highlight, "sha256");
-                let url = extract_field(source, highlight, "url");
-                let group = extract_field(source, highlight, "group");
+                let mut sha256 = extract_field(source, highlight, "sha256");
+                let mut url = extract_field(source, highlight, "url");
+                let mut group = extract_field(source, highlight, "group");
+                // fall back to parsing the _id field if source and highlight
+                // didn't provide the identifier. The _id format is
+                // "{identifier}-{group}" for both result and tag documents.
+                if sha256.is_none() && url.is_none() && !doc.id.is_empty() {
+                    if let Some(sep_idx) = doc.id.rfind('-') {
+                        let id_part = &doc.id[..sep_idx];
+                        let group_part = &doc.id[sep_idx + 1..];
+                        // SHA256 hashes are 64 hex chars; anything else is a URL
+                        if id_part.len() == 64
+                            && id_part.chars().all(|c| c.is_ascii_hexdigit())
+                        {
+                            sha256 = Some(id_part.to_owned());
+                        } else {
+                            url = Some(id_part.to_owned());
+                        }
+                        if group.is_none() {
+                            group = Some(group_part.to_owned());
+                        }
+                    }
+                }
                 // build a bounded excerpt
                 let excerpt = build_excerpt(&doc.source, &doc.highlight);
                 SearchHit {
