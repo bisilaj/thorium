@@ -67,11 +67,21 @@ struct SearchHit {
     excerpt: String,
 }
 
+/// Strip Kibana highlighting tags from text.
+///
+/// The Thorium Elasticsearch queries use `@kibana-highlighted-field@` and
+/// `@/kibana-highlighted-field@` as highlight markers for the web UI. These
+/// are noise for agent consumption.
+fn strip_kibana_tags(text: &str) -> String {
+    text.replace("@kibana-highlighted-field@", "")
+        .replace("@/kibana-highlighted-field@", "")
+}
+
 /// Extract a bounded excerpt from an Elasticsearch document.
 ///
 /// Prefers the `highlight` field (which contains search-relevant snippets)
-/// over the raw `source`. Truncates to [`MAX_EXCERPT_CHARS`] to prevent
-/// context bloat.
+/// over the raw `source`. Strips Kibana highlighting tags and truncates to
+/// [`MAX_EXCERPT_CHARS`] to prevent context bloat.
 fn build_excerpt(
     source: &Option<serde_json::Value>,
     highlight: &Option<serde_json::Value>,
@@ -79,7 +89,8 @@ fn build_excerpt(
     // prefer highlight snippets if available
     if let Some(hl) = highlight {
         let text = serde_json::to_string(hl).unwrap_or_default();
-        return truncate_string(&text, MAX_EXCERPT_CHARS);
+        let cleaned = strip_kibana_tags(&text);
+        return truncate_string(&cleaned, MAX_EXCERPT_CHARS);
     }
     // fall back to a preview of the source
     if let Some(src) = source {
@@ -101,6 +112,26 @@ fn truncate_string(text: &str, max_chars: usize) -> String {
         let truncated: String = text.chars().take(max_chars).collect();
         format!("{}...", truncated)
     }
+}
+
+/// Extract a string field from a JSON value, checking the source first
+/// then falling back to the highlight field (with Kibana tags stripped).
+fn extract_field(
+    source: Option<&serde_json::Value>,
+    highlight: Option<&serde_json::Value>,
+    field: &str,
+) -> Option<String> {
+    // try source first
+    if let Some(val) = source.and_then(|s| s.get(field)).and_then(|v| v.as_str()) {
+        return Some(val.to_owned());
+    }
+    // fall back to highlight (which wraps values in arrays)
+    if let Some(arr) = highlight.and_then(|h| h.get(field)).and_then(|v| v.as_array()) {
+        if let Some(first) = arr.first().and_then(|v| v.as_str()) {
+            return Some(strip_kibana_tags(first));
+        }
+    }
+    None
 }
 
 #[tool_router(router = search_router, vis = "pub")]
@@ -174,25 +205,19 @@ impl ThoriumMCP {
         opts.page_size = limit;
         // execute the search
         let cursor = thorium.search.search(&opts).await?;
-        // project each hit, extracting identifying fields from the ES document
+        // project each hit, extracting identifying fields from the ES document.
+        // fields are checked in the _source first, then the highlight field
+        // as a fallback (with Kibana tags stripped).
         let hits: Vec<SearchHit> = cursor
             .data
             .iter()
             .map(|doc| {
                 let source = doc.source.as_ref();
-                // extract sha256 (sample results) or url (repo results)
-                let sha256 = source
-                    .and_then(|s| s.get("sha256"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let url = source
-                    .and_then(|s| s.get("url"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let group = source
-                    .and_then(|s| s.get("group"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                let highlight = doc.highlight.as_ref();
+                // extract sha256 (sample results/tags) or url (repo results/tags)
+                let sha256 = extract_field(source, highlight, "sha256");
+                let url = extract_field(source, highlight, "url");
+                let group = extract_field(source, highlight, "group");
                 // build a bounded excerpt
                 let excerpt = build_excerpt(&doc.source, &doc.highlight);
                 SearchHit {
