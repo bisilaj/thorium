@@ -11,6 +11,8 @@
 //!    reactions for a pipeline
 //! 4. [`get_reaction_logs`](ThoriumMCP::get_reaction_logs) — fetch execution
 //!    logs for failure diagnosis
+//! 5. [`cancel_reaction`](ThoriumMCP::cancel_reaction) — cancel (delete) a
+//!    reaction that is no longer needed
 
 use rmcp::ErrorData;
 use rmcp::handler::server::tool::Extension as RmcpExtension;
@@ -100,6 +102,15 @@ fn parse_reaction_status(status: &str) -> Result<ReactionStatus, ErrorData> {
             data: None,
         }),
     }
+}
+
+/// The params needed to cancel (delete) a reaction.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CancelReaction {
+    /// The name of the group this reaction belongs to.
+    pub group: String,
+    /// The UUID of the reaction to cancel.
+    pub reaction_id: Uuid,
 }
 
 /// The params needed to get logs for a reaction stage.
@@ -411,5 +422,94 @@ impl ThoriumMCP {
             meta: None,
         };
         Ok(result)
+    }
+
+    /// Cancel (delete) a running or completed reaction.
+    ///
+    /// Use this to stop a reaction that was created by mistake, is taking
+    /// too long, or is no longer needed. This permanently removes the
+    /// reaction and its associated jobs.
+    ///
+    /// # Arguments
+    ///
+    /// * `parameters` - The parameters required for this tool
+    /// * `parts` - The request parts required to get a token for this tool
+    #[tool(
+        name = "cancel_reaction",
+        description = "Cancel (delete) a reaction. Use this to stop a reaction that was created by mistake or is no longer needed. Requires the group and reaction_id (from create_reaction or list_reactions). This permanently removes the reaction."
+    )]
+    #[instrument(name = "ThoriumMCP::cancel_reaction", skip(self, parts), err(Debug))]
+    pub async fn cancel_reaction(
+        &self,
+        Parameters(CancelReaction {
+            group,
+            reaction_id,
+        }): Parameters<CancelReaction>,
+        RmcpExtension(parts): RmcpExtension<axum::http::request::Parts>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // get a thorium client
+        let thorium = self.conf.client(&parts).await?;
+        // delete the reaction
+        let resp = thorium.reactions.delete(&group, &reaction_id).await?;
+        // check the response status
+        let success = resp.status().is_success();
+        // build the response
+        let response = json!({
+            "reaction_id": reaction_id.to_string(),
+            "group": group,
+            "cancelled": success,
+        });
+        let serialized = serde_json::to_value(&response).unwrap();
+        // build our result
+        let result = CallToolResult {
+            content: vec![Content::json(&response)?],
+            structured_content: Some(serialized),
+            is_error: Some(!success),
+            meta: None,
+        };
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_reaction_status_valid_values() {
+        assert_eq!(
+            parse_reaction_status("Created").unwrap(),
+            ReactionStatus::Created
+        );
+        assert_eq!(
+            parse_reaction_status("Started").unwrap(),
+            ReactionStatus::Started
+        );
+        assert_eq!(
+            parse_reaction_status("Completed").unwrap(),
+            ReactionStatus::Completed
+        );
+        assert_eq!(
+            parse_reaction_status("Failed").unwrap(),
+            ReactionStatus::Failed
+        );
+    }
+
+    #[test]
+    fn parse_reaction_status_invalid_values() {
+        assert!(parse_reaction_status("created").is_err()); // lowercase
+        assert!(parse_reaction_status("CREATED").is_err()); // uppercase
+        assert!(parse_reaction_status("Pending").is_err()); // nonexistent
+        assert!(parse_reaction_status("").is_err()); // empty
+        assert!(parse_reaction_status(" Created").is_err()); // leading space
+    }
+
+    #[test]
+    fn parse_reaction_status_error_message_includes_valid_values() {
+        let err = parse_reaction_status("bogus").unwrap_err();
+        let msg = err.message.to_string();
+        assert!(msg.contains("bogus"), "Error should include the invalid value");
+        assert!(msg.contains("Created"), "Error should list valid values");
+        assert!(msg.contains("Failed"), "Error should list valid values");
     }
 }

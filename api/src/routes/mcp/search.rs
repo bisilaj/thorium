@@ -268,3 +268,142 @@ impl ThoriumMCP {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── strip_kibana_tags ─────────────────────────────────────────
+
+    #[test]
+    fn strip_kibana_tags_removes_open_and_close_tags() {
+        let input = "@kibana-highlighted-field@system@/kibana-highlighted-field@";
+        assert_eq!(strip_kibana_tags(input), "system");
+    }
+
+    #[test]
+    fn strip_kibana_tags_handles_no_tags() {
+        assert_eq!(strip_kibana_tags("plain text"), "plain text");
+    }
+
+    #[test]
+    fn strip_kibana_tags_handles_multiple_tags() {
+        let input = "found @kibana-highlighted-field@mimikatz@/kibana-highlighted-field@ in @kibana-highlighted-field@memory@/kibana-highlighted-field@";
+        assert_eq!(strip_kibana_tags(input), "found mimikatz in memory");
+    }
+
+    #[test]
+    fn strip_kibana_tags_handles_empty_string() {
+        assert_eq!(strip_kibana_tags(""), "");
+    }
+
+    // ── truncate_string ───────────────────────────────────────────
+
+    #[test]
+    fn truncate_string_under_limit() {
+        assert_eq!(truncate_string("short", 100), "short");
+    }
+
+    #[test]
+    fn truncate_string_at_exact_limit() {
+        assert_eq!(truncate_string("12345", 5), "12345");
+    }
+
+    #[test]
+    fn truncate_string_over_limit() {
+        let result = truncate_string("hello world", 5);
+        assert_eq!(result, "hello...");
+    }
+
+    // ── extract_field ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_field_from_source() {
+        let source = json!({"sha256": "abc123", "group": "system"});
+        assert_eq!(
+            extract_field(Some(&source), None, "sha256"),
+            Some("abc123".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_field_from_highlight_when_source_missing() {
+        let highlight = json!({
+            "group": ["@kibana-highlighted-field@system@/kibana-highlighted-field@"]
+        });
+        assert_eq!(
+            extract_field(None, Some(&highlight), "group"),
+            Some("system".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_field_source_takes_priority_over_highlight() {
+        let source = json!({"group": "from_source"});
+        let highlight = json!({"group": ["from_highlight"]});
+        assert_eq!(
+            extract_field(Some(&source), Some(&highlight), "group"),
+            Some("from_source".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_field_returns_none_when_field_missing() {
+        let source = json!({"other_field": "value"});
+        assert_eq!(extract_field(Some(&source), None, "sha256"), None);
+    }
+
+    #[test]
+    fn extract_field_returns_none_when_both_null() {
+        assert_eq!(extract_field(None, None, "sha256"), None);
+    }
+
+    #[test]
+    fn extract_field_highlight_empty_array() {
+        let highlight = json!({"sha256": []});
+        assert_eq!(extract_field(None, Some(&highlight), "sha256"), None);
+    }
+
+    // ── build_excerpt ─────────────────────────────────────────────
+
+    #[test]
+    fn build_excerpt_prefers_highlight() {
+        let source = json!({"results": "source content"});
+        let highlight = json!({"field": ["matched content"]});
+        let excerpt = build_excerpt(&Some(source), &Some(highlight));
+        assert!(excerpt.contains("matched content"));
+        assert!(!excerpt.contains("source content"));
+    }
+
+    #[test]
+    fn build_excerpt_falls_back_to_source_results() {
+        let source = json!({"results": {"finding": "malware detected"}});
+        let excerpt = build_excerpt(&Some(source), &None);
+        assert!(excerpt.contains("malware detected"));
+    }
+
+    #[test]
+    fn build_excerpt_strips_kibana_tags_from_highlight() {
+        let highlight = json!({
+            "field": ["@kibana-highlighted-field@test@/kibana-highlighted-field@"]
+        });
+        let excerpt = build_excerpt(&None, &Some(highlight));
+        assert!(!excerpt.contains("@kibana"));
+        assert!(excerpt.contains("test"));
+    }
+
+    #[test]
+    fn build_excerpt_empty_when_both_none() {
+        assert_eq!(build_excerpt(&None, &None), "");
+    }
+
+    #[test]
+    fn build_excerpt_truncates_long_content() {
+        let long_content = "x".repeat(1000);
+        let source = json!({"results": long_content});
+        let excerpt = build_excerpt(&Some(source), &None);
+        assert!(excerpt.len() < 600); // MAX_EXCERPT_CHARS + "..." + quotes
+        assert!(excerpt.ends_with("..."));
+    }
+}
