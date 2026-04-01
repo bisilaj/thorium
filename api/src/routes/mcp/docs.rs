@@ -302,10 +302,11 @@ impl ThoriumMCP {
         McpConfig::grab_token(&parts)?;
 
         let entries = parse_summary(&self.conf.docs_path).await?;
-        let serialized = serde_json::to_value(&entries).unwrap();
+        let response = serde_json::json!({ "entries": &entries });
+        let serialized = serde_json::to_value(&response).unwrap();
 
         Ok(CallToolResult {
-            content: vec![Content::json(&entries)?],
+            content: vec![Content::json(&response)?],
             structured_content: Some(serialized),
             is_error: Some(false),
             meta: None,
@@ -445,10 +446,14 @@ impl ThoriumMCP {
         results.sort_by(|a, b| b.match_count.cmp(&a.match_count));
         results.truncate(max_results);
 
-        let serialized = serde_json::to_value(&results).unwrap();
+        let response = serde_json::json!({
+            "results": &results,
+            "result_count": results.len(),
+        });
+        let serialized = serde_json::to_value(&response).unwrap();
 
         Ok(CallToolResult {
-            content: vec![Content::json(&results)?],
+            content: vec![Content::json(&response)?],
             structured_content: Some(serialized),
             is_error: Some(false),
             meta: None,
