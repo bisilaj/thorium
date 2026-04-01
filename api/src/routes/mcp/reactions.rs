@@ -51,6 +51,18 @@ pub struct CreateReaction {
     pub pipeline: String,
     /// The SHA256 hashes of the samples (files) to analyze.
     pub samples: Vec<String>,
+    /// Optional per-image argument overrides, keyed by image name. Use
+    /// get_pipeline to see which images are in each stage, and get_image
+    /// to understand what arguments an image accepts.
+    ///
+    /// Example: `{"yara-scan": {"switches": ["--verbose"], "kwargs": {"--ruleset": ["custom"]}}}`
+    ///
+    /// Each image's args support: `positionals` (array of strings),
+    /// `kwargs` (object mapping flag to array of values),
+    /// `switches` (array of flag strings), and `opts` (override options).
+    /// If not provided, pipeline default arguments are used.
+    #[serde(default)]
+    pub args: Option<serde_json::Value>,
     /// Optional tags to label this reaction for later discovery.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -193,7 +205,7 @@ impl ThoriumMCP {
     /// * `parts` - The request parts required to get a token for this tool
     #[tool(
         name = "create_reaction",
-        description = "Create a new reaction to run an analysis pipeline on one or more samples. Use list_pipelines and get_pipeline first to understand pipeline structure. Returns a reaction_id that can be polled with get_reaction to monitor progress."
+        description = "Create a new reaction to run an analysis pipeline on one or more samples. Use list_pipelines and get_pipeline first to understand pipeline structure. Optionally pass per-image args to customize analysis (use get_image to see what each image accepts). Returns a reaction_id that can be polled with get_reaction to monitor progress."
     )]
     #[instrument(name = "ThoriumMCP::create_reaction", skip(self, parts), err(Debug))]
     pub async fn create_reaction(
@@ -202,6 +214,7 @@ impl ThoriumMCP {
             group,
             pipeline,
             samples,
+            args,
             tags,
             sla,
         }): Parameters<CreateReaction>,
@@ -219,6 +232,23 @@ impl ThoriumMCP {
         for sample in &samples {
             validate_sha256(sample)?;
         }
+        // parse the optional per-image args if provided
+        let parsed_args: std::collections::HashMap<String, crate::models::GenericJobArgs> =
+            match args {
+                Some(value) if !value.is_null() => {
+                    serde_json::from_value(value).map_err(|e| ErrorData {
+                        code: rmcp::model::ErrorCode::INVALID_PARAMS,
+                        message: format!(
+                            "Invalid args format: {}. Expected an object mapping image names to \
+                             {{positionals: [str], kwargs: {{flag: [values]}}, switches: [str]}}",
+                            e
+                        )
+                        .into(),
+                        data: None,
+                    })?
+                }
+                _ => std::collections::HashMap::new(),
+            };
         // get a thorium client
         let thorium = self.conf.client(&parts).await?;
         // build the reaction request
@@ -226,6 +256,7 @@ impl ThoriumMCP {
         request.samples = samples;
         request.tags = tags;
         request.sla = sla;
+        request.args = parsed_args;
         // create the reaction
         let creation = thorium.reactions.create(&request).await?;
         // build the response, including group so the agent can call get_reaction
@@ -503,6 +534,94 @@ mod tests {
         assert!(parse_reaction_status("").is_err()); // empty
         assert!(parse_reaction_status(" Created").is_err()); // leading space
     }
+
+    // ── args deserialization ─────────────────────────────────────
+
+    #[test]
+    fn args_deserialize_valid_kwargs() {
+        use crate::models::GenericJobArgs;
+        use std::collections::HashMap;
+
+        let value = json!({
+            "yara-scan": {
+                "switches": ["--verbose"],
+                "kwargs": {"--ruleset": ["custom"]}
+            }
+        });
+        let result: Result<HashMap<String, GenericJobArgs>, _> =
+            serde_json::from_value(value);
+        assert!(result.is_ok());
+        let args = result.unwrap();
+        assert!(args.contains_key("yara-scan"));
+        let yara_args = &args["yara-scan"];
+        assert_eq!(yara_args.switches, vec!["--verbose"]);
+        assert_eq!(
+            yara_args.kwargs.get("--ruleset").unwrap(),
+            &vec!["custom".to_owned()]
+        );
+    }
+
+    #[test]
+    fn args_deserialize_empty_object() {
+        use crate::models::GenericJobArgs;
+        use std::collections::HashMap;
+
+        let value = json!({});
+        let result: Result<HashMap<String, GenericJobArgs>, _> =
+            serde_json::from_value(value);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn args_deserialize_positionals_only() {
+        use crate::models::GenericJobArgs;
+        use std::collections::HashMap;
+
+        let value = json!({
+            "strings": {
+                "positionals": ["--encoding=utf-8"]
+            }
+        });
+        let result: Result<HashMap<String, GenericJobArgs>, _> =
+            serde_json::from_value(value);
+        assert!(result.is_ok());
+        let args = result.unwrap();
+        assert_eq!(args["strings"].positionals, vec!["--encoding=utf-8"]);
+    }
+
+    #[test]
+    fn args_deserialize_invalid_format_gives_error() {
+        use crate::models::GenericJobArgs;
+        use std::collections::HashMap;
+
+        // kwargs should be object, not string
+        let value = json!({
+            "yara-scan": "not an object"
+        });
+        let result: Result<HashMap<String, GenericJobArgs>, _> =
+            serde_json::from_value(value);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn args_deserialize_multiple_images() {
+        use crate::models::GenericJobArgs;
+        use std::collections::HashMap;
+
+        let value = json!({
+            "strings": {"switches": ["--verbose"]},
+            "capa": {"kwargs": {"--format": ["json"]}},
+            "yara-scan": {"positionals": ["rules.yar"]}
+        });
+        let result: Result<HashMap<String, GenericJobArgs>, _> =
+            serde_json::from_value(value);
+        assert!(result.is_ok());
+        let args = result.unwrap();
+        assert_eq!(args.len(), 3);
+    }
+
+    // ── parse_reaction_status ─────────────────────────────────────
 
     #[test]
     fn parse_reaction_status_error_message_includes_valid_values() {
